@@ -3,15 +3,6 @@ import subprocess
 import pymysql
 from urllib.request import urlopen
 
-# Read DB config from environment 
-db_config = {
-    'host': os.environ.get('DB_HOST', 'mydatabase.com'),
-    'user': os.environ.get('DB_USER', 'app_user'),
-    'password': os.environ.get('DB_PASSWORD', ''),
-    'database': os.environ.get('DB_NAME', 'mydb'),
-    'port': int(os.environ.get('DB_PORT', '3306'))
-}
-
 def get_user_input():
     user_input = input('Enter your name: ')
     return user_input
