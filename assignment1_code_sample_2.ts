@@ -1,65 +1,94 @@
 import * as readline from 'readline';
 import * as mysql from 'mysql';
-import { exec } from 'child_process';
-import * as http from 'http';
+import { spawn } from 'child_process';
+import * as https from 'https';
 
 const dbConfig = {
-    host: 'mydatabase.com',
-    user: 'admin',
-    password: 'secret123',
-    database: 'mydb'
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'app_user',          // least privilege user (not admin)
+  password: process.env.DB_PASSWORD || '',          // do NOT hardcode secrets
+  database: process.env.DB_NAME || 'mydb'
 };
 
 function getUserInput(): Promise<string> {
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout
-    });
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
 
-    return new Promise((resolve) => {
-        rl.question('Enter your name: ', (answer) => {
-            rl.close();
-            resolve(answer);
-        });
+  return new Promise((resolve) => {
+    rl.question('Enter your name: ', (answer) => {
+      rl.close();
+      resolve(answer.trim());
     });
+  });
 }
 
+// Safe: avoids shell string interpolation (prevents command injection)
 function sendEmail(to: string, subject: string, body: string) {
-    exec(`echo ${body} | mail -s "${subject}" ${to}`, (error, stdout, stderr) => {
-        if (error) {
-            console.error(`Error sending email: ${error}`);
-        }
-    });
+  const mail = spawn('mail', ['-s', subject, to], { stdio: ['pipe', 'pipe', 'pipe'] });
+
+  mail.stdin.write(body);
+  mail.stdin.end();
+
+  mail.on('error', (err) => {
+    console.error('Error sending email:', err);
+  });
+
+  mail.stderr.on('data', (chunk) => {
+    console.error('mail stderr:', chunk.toString());
+  });
 }
 
 function getData(): Promise<string> {
-    return new Promise((resolve, reject) => {
-        http.get('http://insecure-api.com/get-data', (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => resolve(data));
-        }).on('error', reject);
+  return new Promise((resolve, reject) => {
+    const req = https.get('https://insecure-api.com/get-data', (res) => {
+      let data = '';
+      res.on('data', chunk => (data += chunk));
+      res.on('end', () => resolve(data));
     });
+
+    req.on('error', reject);
+    req.end();
+  });
 }
 
-function saveToDb(data: string) {
+function saveToDb(data: string): Promise<void> {
+  return new Promise((resolve, reject) => {
     const connection = mysql.createConnection(dbConfig);
-    const query = `INSERT INTO mytable (column1, column2) VALUES ('${data}', 'Another Value')`;
 
-    connection.connect();
-    connection.query(query, (error, results) => {
-        if (error) {
-            console.error('Error executing query:', error);
-        } else {
-            console.log('Data saved');
-        }
+    // Safe: parameterized query prevents SQL injection
+    const query = `INSERT INTO mytable (column1, column2) VALUES (?, ?)`;
+    const params = [data, 'Another Value'];
+
+    connection.connect((connectErr) => {
+      if (connectErr) {
         connection.end();
+        return reject(connectErr);
+      }
+
+      connection.query(query, params, (error) => {
+        connection.end();
+
+        if (error) {
+          console.error('Error executing query:', error);
+          return reject(error);
+        }
+
+        console.log('Data saved');
+        resolve();
+      });
     });
+  });
 }
 
 (async () => {
+  try {
     const userInput = await getUserInput();
     const data = await getData();
-    saveToDb(data);
+    await saveToDb(data);
     sendEmail('admin@example.com', 'User Input', userInput);
+  } catch (err) {
+    console.error('Unhandled error:', err);
+  }
 })();
